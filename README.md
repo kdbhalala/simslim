@@ -24,7 +24,9 @@ allowlisted launchd labels SimSlim manages; it is not a live-process count. A
 slim boot still runs required core services plus system apps and extensions.
 `measure` walks every process under that simulator's `launchd_sim` and sums
 `phys_footprint`. A sum of `ps` RSS values is not comparable because RSS counts
-shared mappings once for every process that maps them.
+shared mappings once for every process that maps them. If a host macOS bug
+prevents simulator processes from sharing the dyld cache, `measure` prints a
+warning (see [issue #73](https://github.com/MobAI-App/simslim/issues/73)).
 
 ## Install
 

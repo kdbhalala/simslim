@@ -382,6 +382,9 @@ func cmdMeasure(ctx context.Context, cmd *cli.Command) error {
 		return writeJSON(m)
 	}
 	fmt.Printf("%s: %d processes, %s memory footprint (phys_footprint)\n", udid, m.Processes, humanBytes(m.Bytes))
+	if m.SharedCacheUnshared {
+		fmt.Fprintln(os.Stderr, "warning: this simulator's processes do not share the dyld cache (__DATA_CONST); memory is ~4x higher than normal. This is a host macOS issue, not slimming: https://github.com/MobAI-App/simslim/issues/73")
+	}
 	return nil
 }
 

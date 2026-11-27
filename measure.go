@@ -12,10 +12,17 @@ import (
 
 // Measurement is a device's real memory cost.
 type Measurement struct {
-	Processes int     `json:"processes"`
-	Bytes     int64   `json:"bytes"` // summed phys_footprint (compressed + dirty), the number that caps how many sims fit
-	CPU       float64 `json:"cpu"`   // summed %cpu across the tree (ps's decaying average; can exceed 100 on multicore)
+	Processes           int     `json:"processes"`
+	Bytes               int64   `json:"bytes"` // summed phys_footprint (compressed + dirty), the number that caps how many sims fit
+	CPU                 float64 `json:"cpu"`   // summed %cpu across the tree (ps's decaying average; can exceed 100 on multicore)
+	SharedCacheUnshared bool    `json:"sharedCacheUnshared,omitempty"`
 }
+
+// sharedCacheUnsharedThreshold is the dirty __DATA_CONST footprint on the
+// simulator's sharingd above which the host is not sharing the dyld shared
+// cache across simulator processes (GitHub issue #73: ~848-884 KB on a healthy
+// host vs ~88-89 MB on an affected macOS 27.2.x host).
+const sharedCacheUnsharedThreshold = 16 << 20
 
 // Process is one process in a simulator's launchd tree, for the top drill-down.
 type Process struct {
@@ -43,7 +50,9 @@ func Measure(ctx context.Context, udid string) (Measurement, error) {
 		return Measurement{}, err
 	}
 
-	return measureTree(root, snap, footprint), nil
+	m := measureTree(root, snap, footprint)
+	m.SharedCacheUnshared = probeSharedCacheUnshared(ctx, root, snap)
+	return m, nil
 }
 
 // MeasureProcesses returns every process in the device's launchd tree with its
@@ -239,4 +248,41 @@ func parseBytes(s string) int64 {
 		return 0
 	}
 	return int64(v * float64(mult))
+}
+
+func probeSharedCacheUnshared(ctx context.Context, root int, snap psSnapshot) bool {
+	pid := 0
+	for p := range treePIDs(root, snap.children) {
+		if snap.comm[p] == "sharingd" && (pid == 0 || p < pid) {
+			pid = p
+		}
+	}
+	if pid == 0 {
+		return false
+	}
+	out, err := exec.CommandContext(ctx, "footprint", "-p", strconv.Itoa(pid)).Output()
+	if err != nil {
+		return false
+	}
+	dirty, ok := parseFootprintDataConstDirty(string(out))
+	return ok && dirty > sharedCacheUnsharedThreshold
+}
+
+// parseFootprintDataConstDirty extracts the Dirty byte count of the
+// __DATA_CONST row from `footprint -p <pid>` output.
+func parseFootprintDataConstDirty(out string) (int64, bool) {
+	for _, line := range strings.Split(out, "\n") {
+		f := strings.Fields(line)
+		if len(f) < 5 || f[len(f)-1] != "__DATA_CONST" {
+			continue
+		}
+		raw := f[0]
+		if f[1] == "B" || f[1] == "KB" || f[1] == "MB" || f[1] == "GB" {
+			raw += strings.TrimSuffix(f[1], "B")
+		} else {
+			raw = strings.TrimSuffix(raw, "B")
+		}
+		return parseBytes(raw), true
+	}
+	return 0, false
 }
